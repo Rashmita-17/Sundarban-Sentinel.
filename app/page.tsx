@@ -4,17 +4,25 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from '@/components/Sidebar';
 import Map from '@/components/Map';
 import TemporalSlider from '@/components/TemporalSlider';
-import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Dashboard() {
   const [currentYear, setCurrentYear] = useState(2022);
   const [analysisData, setAnalysisData] = useState<Record<string, unknown> | null>(null);
   const [loading, setLoading] = useState(false);
   const [selectedVillage, setSelectedVillage] = useState<string | null>(null);
+  const [aoiGeojson, setAoiGeojson] = useState<{ type: 'Polygon'; coordinates: Array<Array<[number, number]>> } | null>(null);
 
   // Trigger analysis when year changes
   useEffect(() => {
     const runAnalysis = async () => {
+      if (!aoiGeojson) {
+        setAnalysisData(null);
+        return;
+      }
+
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 60000);
+
       setLoading(true);
       try {
         const response = await fetch('http://localhost:8000/api/analyze', {
@@ -23,26 +31,34 @@ export default function Dashboard() {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            geojson: {
-              type: "Polygon",
-              coordinates: [[[88.5, 21.5], [89.2, 21.5], [89.2, 22.2], [88.5, 22.2], [88.5, 21.5]]]
-            },
+            geojson: aoiGeojson,
             date_range: [`${currentYear}-01-01`, `${currentYear}-12-31`]
           }),
+          signal: controller.signal,
         });
+
+        if (!response.ok) {
+          const text = await response.text();
+          throw new Error(`Backend error ${response.status}: ${text}`);
+        }
+
         const data = await response.json();
         if (data.status === 'success') {
           setAnalysisData(data.analysis_results);
+        } else {
+          throw new Error(data?.message || 'Analysis failed');
         }
       } catch (error) {
+        setAnalysisData(null);
         console.error('Analysis failed:', error);
       } finally {
+        window.clearTimeout(timeout);
         setLoading(false);
       }
     };
 
     runAnalysis();
-  }, [currentYear]);
+  }, [currentYear, aoiGeojson]);
 
   return (
     <main className="flex h-screen w-full overflow-hidden bg-slate-950">
@@ -62,6 +78,7 @@ export default function Dashboard() {
           analysisData={analysisData} 
           isLoading={loading}
           selectedVillage={selectedVillage}
+          onAoiChange={setAoiGeojson}
         />
 
         {/* Loading Indicator */}

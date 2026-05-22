@@ -4,7 +4,6 @@ import React, { useState, useEffect } from 'react';
 import { Leaf, Waves, Home, BarChart3, ShieldAlert, Settings, Download, Loader2 } from 'lucide-react';
 import { motion, useMotionValue, animate } from 'framer-motion';
 import jsPDF from 'jspdf';
-import html2canvas from 'html2canvas';
 
 interface SidebarProps {
     analysisData?: Record<string, unknown> | null;
@@ -13,7 +12,7 @@ interface SidebarProps {
     onVillageSelect?: (name: string | null) => void;
 }
 
-const Counter = ({ value, prefix = "" }: { value: number; label?: string; prefix?: string }) => {
+const Counter = ({ value, prefix = "", decimals = 1 }: { value: number; label?: string; prefix?: string; decimals?: number }) => {
     const count = useMotionValue(0);
     const [displayValue, setDisplayValue] = useState(prefix + "0.0");
 
@@ -23,13 +22,13 @@ const Counter = ({ value, prefix = "" }: { value: number; label?: string; prefix
             ease: "easeOut",
             onUpdate: (latest) => {
                 setDisplayValue(prefix + latest.toLocaleString(undefined, {
-                    minimumFractionDigits: 1,
-                    maximumFractionDigits: 1
+                    minimumFractionDigits: decimals,
+                    maximumFractionDigits: decimals
                 }));
             }
         });
         return controls.stop;
-    }, [value, prefix, count]);
+    }, [value, prefix, decimals, count]);
 
     return <span>{displayValue}</span>;
 };
@@ -69,20 +68,20 @@ const Sidebar = ({ analysisData, currentYear = 2022, selectedVillage, onVillageS
             doc.text('Environmental Status', 20, y);
             y += 15;
             
-            const carbonValue = analysisData?.total_carbon_emitted || 2400;
-            const erosionValue = analysisData?.hectares_lost || 158.4;
+            const carbonValue = (analysisData?.total_carbon_emitted as number | undefined) ?? 2400;
+            const erosionValue = (analysisData?.hectares_lost as number | undefined) ?? 158.4;
             
             doc.setFontSize(12);
             doc.setTextColor(100, 116, 139); // slate-500
             doc.text('Carbon Loss:', 20, y);
             doc.setTextColor(15, 23, 42);
-            doc.text(`${carbonValue.toFixed(1)} Tons`, 60, y);
+            doc.text(`${carbonValue.toFixed(2)} Tons`, 60, y);
             
             y += 10;
             doc.setTextColor(100, 116, 139);
             doc.text('Erosion Rate:', 20, y);
             doc.setTextColor(248, 113, 113); // red-400
-            doc.text(`${erosionValue.toFixed(1)} Hectares (Critical)`, 60, y);
+            doc.text(`${erosionValue.toFixed(2)} Hectares (Critical)`, 60, y);
             
             // 3. Village Vulnerability
             y += 25;
@@ -126,8 +125,8 @@ const Sidebar = ({ analysisData, currentYear = 2022, selectedVillage, onVillageS
         }
     };
 
-    const carbonValue = analysisData?.total_carbon_emitted || 2400;
-    const erosionValue = analysisData?.hectares_lost || 158.4;
+    const carbonValue = (analysisData?.total_carbon_emitted as number | undefined) ?? 2400;
+    const erosionValue = (analysisData?.hectares_lost as number | undefined) ?? 158.4;
 
     return (
         <div className="w-80 h-screen bg-slate-950 text-slate-200 flex flex-col border-r border-slate-800 z-10 relative">
@@ -149,7 +148,7 @@ const Sidebar = ({ analysisData, currentYear = 2022, selectedVillage, onVillageS
                         <div className="flex justify-between items-end">
                             <div>
                                 <p className="text-2xl font-bold text-white">
-                                    <Counter value={carbonValue} label="carbon" />
+                                    <Counter value={carbonValue} label="carbon" decimals={2} />
                                 </p>
                                 <p className="text-xs text-emerald-400 mt-1">↑ 12% vs last year</p>
                             </div>

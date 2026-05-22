@@ -1,6 +1,6 @@
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
@@ -10,12 +10,116 @@ import io
 from fpdf import FPDF
 import ee
 import json
+import hashlib
+import math
 
 from datetime import datetime
-from predict import run_pipeline
-from utils.carbon_engine import calculate_carbon_impact
-from ml.data_fetcher import fetch_sentinel_data
 import numpy as np
+from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+
+from db import engine, get_db
+from db_models import Base, AnalysisResult
+
+ALGO_VERSION = "gee_fast_v3_watergain_ndviT1"
+
+
+def _polygon_to_bbox(polygon: Dict[str, Any]):
+    coords = polygon["coordinates"][0]
+    lons = [c[0] for c in coords]
+    lats = [c[1] for c in coords]
+    return [min(lons), min(lats), max(lons), max(lats)]
+
+
+def _choose_scale_m(
+    polygon: Dict[str, Any],
+    target_px: int = 192,
+    min_scale_m: float = 60.0,
+    max_scale_m: float = 2000.0,
+) -> float:
+    min_lon, min_lat, max_lon, max_lat = _polygon_to_bbox(polygon)
+    lat_mid = (min_lat + max_lat) / 2.0
+
+    meters_per_deg_lat = 110540.0
+    meters_per_deg_lon = 111320.0 * math.cos(math.radians(lat_mid))
+
+    width_m = max(1.0, (max_lon - min_lon) * meters_per_deg_lon)
+    height_m = max(1.0, (max_lat - min_lat) * meters_per_deg_lat)
+
+    scale = max(width_m / target_px, height_m / target_px, min_scale_m)
+    return float(min(max_scale_m, scale))
+
+
+def _get_median_s2(region: ee.Geometry, year: int) -> ee.Image:
+    start_date = f"{year}-01-01"
+    end_date = f"{year}-12-31"
+
+    col = (
+        ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+        .filterBounds(region)
+        .filterDate(start_date, end_date)
+        .filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 20))
+    )
+
+    count = col.size()
+    col = ee.ImageCollection(ee.Algorithms.If(count.gt(0), col, ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED").filterBounds(region).filterDate(f"{year-1}-01-01", f"{year+1}-12-31").filter(ee.Filter.lt("CLOUDY_PIXEL_PERCENTAGE", 30))))
+    return col.median().clip(region).unmask(0)
+
+
+def gee_fast_metrics(polygon: Dict[str, Any], year: int) -> Dict[str, float]:
+    region = ee.Geometry(polygon)
+    scale_m = _choose_scale_m(polygon)
+    simplified = region.simplify(scale_m)
+
+    img_t1 = _get_median_s2(region, year - 1)
+    img_t2 = _get_median_s2(region, year)
+
+    ndvi_t1 = img_t1.normalizedDifference(["B8", "B4"]).rename("NDVI_T1")
+    ndvi_t2 = img_t2.normalizedDifference(["B8", "B4"]).rename("NDVI_T2")
+    ndwi_t1 = img_t1.normalizedDifference(["B3", "B8"]).rename("NDWI_T1")
+    ndwi_t2 = img_t2.normalizedDifference(["B3", "B8"]).rename("NDWI_T2")
+    water_t1 = ndwi_t1.gt(0.1)
+    water_t2 = ndwi_t2.gt(0.1)
+    water_gain = water_t2.And(water_t1.Not())
+
+    ndvi_drop = ndvi_t1.subtract(ndvi_t2)
+    veg_loss = ndvi_drop.gt(0.25).And(ndvi_t1.gt(0.35)).And(ndvi_t2.lt(0.15))
+
+    mask = water_gain.Or(veg_loss).selfMask()
+
+    pixel_area_ha = ee.Image.pixelArea().divide(10000.0)
+    area_ha_img = pixel_area_ha.updateMask(mask).rename("area_ha")
+
+    carbon_stock = ee.Image.constant(0.0043).multiply(ndvi_t1.multiply(11.726).exp()).rename("carbon_stock")
+    carbon_total_img = carbon_stock.multiply(pixel_area_ha).updateMask(mask).rename("carbon_total")
+
+    eroded_pixels_img = ee.Image(1).updateMask(mask).rename("eroded_pixels")
+
+    sums = (
+        area_ha_img.addBands(carbon_total_img)
+        .addBands(eroded_pixels_img)
+        .reduceRegion(
+            reducer=ee.Reducer.sum(),
+            geometry=simplified,
+            scale=scale_m,
+            maxPixels=1e13,
+            bestEffort=True,
+            tileScale=4,
+        )
+        .getInfo()
+        or {}
+    )
+
+    hectares_lost = float(sums.get("area_ha", 0.0) or 0.0)
+    total_carbon_emitted = float(sums.get("carbon_total", 0.0) or 0.0)
+    eroded_pixels = float(sums.get("eroded_pixels", 0.0) or 0.0)
+
+    return {
+        "scale_m": float(scale_m),
+        "eroded_pixels": float(eroded_pixels),
+        "hectares_lost": float(round(hectares_lost, 4)),
+        "total_carbon_emitted": float(round(total_carbon_emitted, 4)),
+    }
 
 # Load environment variables
 load_dotenv()
@@ -59,6 +163,7 @@ def initialize_gee():
 async def lifespan(app: FastAPI):
     # Initialize GEE on startup
     initialize_gee()
+    Base.metadata.create_all(bind=engine)
     yield
     # Shutdown logic can go here
 
@@ -228,23 +333,23 @@ async def get_tiles(year: int, mode: str = "natural"):
         raise HTTPException(status_code=500, detail=f"GEE Tile Error: {str(e)}")
 
 @app.get("/api/stats")
-async def get_stats(year: int):
+async def get_stats(year: int, db: Session = Depends(get_db)):
     """
     Returns annual summary statistics for the selected year.
     """
-    # Simulate dynamic stats based on year
-    # In production, these would be pulled from a database of analyzed results
-    np.random.seed(year)
-    stats = {
+    rows = db.query(AnalysisResult).filter(AnalysisResult.year == year).all()
+    if not rows:
+        return {"year": year, "analyses": 0, "hectares_lost": 0.0, "total_carbon_emitted": 0.0}
+
+    return {
         "year": year,
-        "carbon_loss": 2000 + (year - 2022) * 150 + np.random.randint(0, 100),
-        "erosion_rate": 150 + (year - 2022) * 5 + np.random.uniform(0, 5),
-        "vulnerability_index": 0.65 + (year - 2022) * 0.02
+        "analyses": len(rows),
+        "hectares_lost": float(sum(r.hectares_lost for r in rows)),
+        "total_carbon_emitted": float(sum(r.total_carbon_emitted for r in rows)),
     }
-    return stats
 
 @app.post("/api/analyze")
-async def analyze_area(request: AnalysisRequest):
+async def analyze_area(request: AnalysisRequest, db: Session = Depends(get_db)):
     if not GEE_INITIALIZED:
         raise HTTPException(status_code=503, detail="Google Earth Engine not initialized. Check server logs.")
         
@@ -254,34 +359,53 @@ async def analyze_area(request: AnalysisRequest):
     # Extract year from date_range for dynamic filtering
     year = int(request.date_range[0].split("-")[0])
     print(f"Analyzing area for year: {year}")
+
+    geojson_str = json.dumps(request.geojson, sort_keys=True, separators=(",", ":"))
+    polygon_hash = hashlib.sha256(f"{ALGO_VERSION}|{geojson_str}".encode("utf-8")).hexdigest()
+
+    cached = (
+        db.query(AnalysisResult)
+        .filter(AnalysisResult.year == year, AnalysisResult.polygon_hash == polygon_hash)
+        .first()
+    )
+    if cached:
+        return {
+            "status": "success",
+            "message": f"Analysis loaded from database for year {year}",
+            "analysis_results": {
+                "eroded_pixels": float(cached.eroded_pixels),
+                "hectares_lost": float(cached.hectares_lost),
+                "total_carbon_emitted": float(cached.total_carbon_emitted),
+                "mask_shape": [int(cached.mask_h), int(cached.mask_w)],
+                "scale_m": 0.0,
+            },
+        }
     
     try:
-        # 1. Fetch dynamic satellite data for the selected year (Sentinel-2 L2A)
-        cube_data = fetch_sentinel_data(request.geojson, year)
-        
-        # 2. Run AI change detection (Siamese UNET)
-        # predict.py's preprocess_cube extracts T1 (previous year) and T2 (selected year)
-        change_mask = run_pipeline(cube_data)
-        
-        # 3. Calculate NDVI for carbon engine
-        # Assuming cube_data channels: 0=Red, 1=Green, 2=Blue, 3=NIR
-        # Using T2 (latest imagery) for NDVI
-        t2_data = cube_data[-1]
-        red = t2_data[0].astype(float)
-        nir = t2_data[3].astype(float)
-        ndvi = (nir - red) / (nir + red + 1e-8)
-        
-        # 4. Calculate carbon impact
-        carbon_results = calculate_carbon_impact(change_mask, ndvi)
-        
+        metrics = await run_in_threadpool(gee_fast_metrics, request.geojson, year)
+        eroded_pixels = float(metrics["eroded_pixels"])
+        record = AnalysisResult(
+            polygon_hash=polygon_hash,
+            year=year,
+            geojson=geojson_str,
+            eroded_pixels=eroded_pixels,
+            hectares_lost=float(metrics["hectares_lost"]),
+            total_carbon_emitted=float(metrics["total_carbon_emitted"]),
+            mask_h=0,
+            mask_w=0,
+        )
+        db.add(record)
+        db.commit()
+
         return {
             "status": "success", 
             "message": f"Analysis completed for year {year}",
             "analysis_results": {
-                "eroded_pixels": float(np.sum(change_mask)),
-                "hectares_lost": carbon_results["hectares_lost"],
-                "total_carbon_emitted": carbon_results["total_carbon_emitted"],
-                "mask_shape": list(change_mask.shape)
+                "eroded_pixels": eroded_pixels,
+                "hectares_lost": float(metrics["hectares_lost"]),
+                "total_carbon_emitted": float(metrics["total_carbon_emitted"]),
+                "mask_shape": [0, 0],
+                "scale_m": float(metrics["scale_m"]),
             }
         }
     except Exception as e:

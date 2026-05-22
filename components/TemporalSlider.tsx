@@ -27,7 +27,7 @@ const TemporalSlider = ({ currentYear, onYearChange }: TemporalSliderProps) => {
   }, [isPlaying, currentYear, onYearChange]);
 
   return (
-    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[600px] z-10">
+    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 w-[calc(100%-3rem)] max-w-[600px] z-10">
       <div className="bg-slate-900/80 backdrop-blur-xl border border-slate-700/50 p-6 rounded-2xl shadow-2xl">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-4">

@@ -1,6 +1,6 @@
 import numpy as np
 
-def calculate_carbon_impact(erosion_mask, ndvi_data):
+def calculate_carbon_impact(erosion_mask, ndvi_data, pixel_size_m: float = 10.0):
     """
     Calculates carbon impact from lost mangrove area.
     
@@ -11,10 +11,8 @@ def calculate_carbon_impact(erosion_mask, ndvi_data):
     Returns:
         dict: A dictionary containing hectares_lost and total_carbon_emitted.
     """
-    # Sentinel-2 resolution is 10m x 10m = 100 square meters per pixel
-    # 1 hectare = 10,000 square meters
-    # So 1 pixel = 100 / 10,000 = 0.01 hectares
-    pixel_to_hectares = 0.01
+    pixel_area_m2 = float(pixel_size_m) * float(pixel_size_m)
+    pixel_to_hectares = pixel_area_m2 / 10000.0
     
     # Calculate total area of eroded pixels in hectares
     eroded_pixel_count = np.sum(erosion_mask)

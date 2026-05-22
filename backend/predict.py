@@ -62,19 +62,43 @@ def run_pipeline(cube_data, checkpoint_path=None):
     """
     Main entry point for processing stac2cube data.
     """
+    checkpoint_ok = bool(checkpoint_path and os.path.exists(checkpoint_path))
+
+    if not isinstance(cube_data, np.ndarray):
+        cube_data = np.array(cube_data)
+
+    if not checkpoint_ok:
+        if cube_data.shape[0] < 2:
+            t2 = cube_data[0].astype(np.float32)
+            t1 = cube_data[0].astype(np.float32)
+        else:
+            t2 = cube_data[-1].astype(np.float32)
+            t1 = cube_data[0].astype(np.float32)
+
+        t1 = t1 / 10000.0
+        t2 = t2 / 10000.0
+
+        g1 = t1[1]
+        nir1 = t1[3]
+        g2 = t2[1]
+        nir2 = t2[3]
+
+        ndwi1 = (g1 - nir1) / (g1 + nir1 + 1e-8)
+        ndwi2 = (g2 - nir2) / (g2 + nir2 + 1e-8)
+
+        delta = ndwi2 - ndwi1
+        change_mask = (delta > 0.12).astype(np.float32)
+        print("Change detection completed (heuristic NDWI fallback).")
+        return change_mask
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
-    
-    # 1. Initialize Model
+
     model = load_model(checkpoint_path, device)
-    
-    # 2. Preprocess Data
     t1, t2 = preprocess_cube(cube_data)
-    
-    # 3. Predict
     change_mask = predict_change(model, t1, t2, device)
-    
-    print("Change detection completed.")
+
+    print("Change detection completed (Siamese UNet).")
     return change_mask
 
 if __name__ == "__main__":

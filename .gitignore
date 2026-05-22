@@ -44,3 +44,4 @@ backend/gee-key.json
 backend/gee-service-account.json
 backend/gee-service-account.json.json
 backend/gee-service-account.json.env
+backend/sentinel.db

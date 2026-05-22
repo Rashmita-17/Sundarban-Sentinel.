@@ -11,6 +11,7 @@ interface MapComponentProps {
   analysisData: Record<string, unknown> | null;
   isLoading?: boolean;
   selectedVillage?: string | null;
+  onAoiChange?: (geojson: { type: 'Polygon'; coordinates: PolygonCoordinates } | null) => void;
 }
 
 // Color source of truth
@@ -23,7 +24,18 @@ const COLORS = {
   villageLow: '#4ADE80',
 };
 
-const VILLAGE_DATA: any = {
+type LngLat = [number, number];
+type PolygonCoordinates = LngLat[][];
+type VillageRisk = 'High' | 'Moderate' | 'Low';
+type VillageFeature = {
+  type: 'Feature';
+  properties: { name: string; risk: VillageRisk };
+  geometry: { type: 'Polygon'; coordinates: PolygonCoordinates };
+};
+type VillageFeatureCollection = { type: 'FeatureCollection'; features: VillageFeature[] };
+type AoiPolygon = { type: 'Polygon'; coordinates: PolygonCoordinates };
+
+const VILLAGE_DATA: VillageFeatureCollection = {
   type: 'FeatureCollection',
   features: [
     {
@@ -59,11 +71,15 @@ const VILLAGE_DATA: any = {
   ]
 };
 
-const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapComponentProps) => {
+const MapComponent = ({ year, analysisData, isLoading, selectedVillage, onAoiChange }: MapComponentProps) => {
   const mapRef = useRef<MapRef>(null);
   const [mode, setMode] = useState<'natural' | 'ndvi'>('natural');
   const [mapLoaded, setMapLoaded] = useState(false);
   const [hoveredLayer, setHoveredLayer] = useState<string | null>(null);
+  const [isDrawingAoi, setIsDrawingAoi] = useState(false);
+  const [draftPoints, setDraftPoints] = useState<LngLat[]>([]);
+  const [cursorPoint, setCursorPoint] = useState<LngLat | null>(null);
+  const [aoi, setAoi] = useState<AoiPolygon | null>(null);
   const [viewState, setViewState] = useState({
     longitude: 88.85, // Sundarbans longitude
     latitude: 21.9, // Sundarbans latitude
@@ -144,7 +160,7 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapCom
     if (selectedVillage && mapRef.current) {
       const village = VILLAGE_DATA.features.find(f => f.properties?.name === selectedVillage);
       if (village && village.geometry.type === 'Polygon') {
-        const coords = (village.geometry as any).coordinates[0][0];
+        const coords = village.geometry.coordinates[0][0];
         mapRef.current.flyTo({
           center: [coords[0], coords[1]],
           zoom: 12,
@@ -154,10 +170,82 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapCom
     }
   }, [selectedVillage]);
 
+  const closeRing = (points: LngLat[]) => {
+    if (points.length < 3) return points;
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (first[0] === last[0] && first[1] === last[1]) return points;
+    return [...points, first];
+  };
+
+  const startDrawing = () => {
+    setIsDrawingAoi(true);
+    setDraftPoints([]);
+    setCursorPoint(null);
+    setAoi(null);
+    onAoiChange?.(null);
+  };
+
+  const cancelDrawing = () => {
+    setIsDrawingAoi(false);
+    setDraftPoints([]);
+    setCursorPoint(null);
+  };
+
+  const finishDrawing = () => {
+    if (draftPoints.length < 3) return;
+    const ring = closeRing(draftPoints);
+    const geojson: AoiPolygon = { type: 'Polygon', coordinates: [ring] };
+    setAoi(geojson);
+    setIsDrawingAoi(false);
+    setDraftPoints([]);
+    setCursorPoint(null);
+    onAoiChange?.(geojson);
+  };
+
+  const clearAoi = () => {
+    setAoi(null);
+    setDraftPoints([]);
+    setCursorPoint(null);
+    setIsDrawingAoi(false);
+    onAoiChange?.(null);
+  };
+
   // Helper to get opacity based on hover state
   const getOpacity = (layerId: string) => {
     if (!hoveredLayer) return 0.5;
     return hoveredLayer === layerId ? 1.0 : 0.1;
+  };
+
+  const draftLine = draftPoints.length
+    ? {
+        type: 'Feature' as const,
+        geometry: {
+          type: 'LineString' as const,
+          coordinates: [...draftPoints, ...(cursorPoint ? [cursorPoint] : [])],
+        },
+        properties: {},
+      }
+    : null;
+
+  const aoiFeature = aoi
+    ? {
+        type: 'Feature' as const,
+        geometry: aoi,
+        properties: {},
+      }
+    : null;
+
+  const onMapClick = (evt: { lngLat: { lng: number; lat: number } }) => {
+    if (!isDrawingAoi) return;
+    const p: LngLat = [evt.lngLat.lng, evt.lngLat.lat];
+    setDraftPoints((prev) => [...prev, p]);
+  };
+
+  const onMapMove = (evt: { lngLat: { lng: number; lat: number } }) => {
+    if (!isDrawingAoi) return;
+    if (!draftPoints.length) return;
+    setCursorPoint([evt.lngLat.lng, evt.lngLat.lat]);
   };
 
   return (
@@ -166,6 +254,12 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapCom
         ref={mapRef}
         {...viewState}
         onMove={evt => setViewState(evt.viewState)}
+        onClick={onMapClick}
+        onMouseMove={onMapMove}
+        onDblClick={() => {
+          if (isDrawingAoi) finishDrawing();
+        }}
+        doubleClickZoom={!isDrawingAoi}
         onLoad={() => setMapLoaded(true)}
         onStyleData={() => {
           // Additional safety to ensure style-dependent operations are possible
@@ -175,6 +269,42 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapCom
         style={{ width: '100%', height: '100%' }}
         mapStyle={styleUrl}
       >
+        {draftLine && (
+          <Source id="aoi-draft" type="geojson" data={draftLine}>
+            <Layer
+              id="aoi-draft-line"
+              type="line"
+              paint={{
+                'line-color': '#22c55e',
+                'line-width': 2,
+                'line-dasharray': [1.5, 1.5],
+              }}
+            />
+          </Source>
+        )}
+
+        {aoiFeature && (
+          <Source id="aoi-final" type="geojson" data={aoiFeature}>
+            <Layer
+              id="aoi-fill"
+              type="fill"
+              paint={{
+                'fill-color': '#22c55e',
+                'fill-opacity': 0.14,
+              }}
+            />
+            <Layer
+              id="aoi-outline"
+              type="line"
+              paint={{
+                'line-color': '#22c55e',
+                'line-width': 2.5,
+                'line-opacity': 0.9,
+              }}
+            />
+          </Source>
+        )}
+
         {/* Render analysis data if available */}
         {analysisData && (
           <>
@@ -284,9 +414,8 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapCom
         </Source>
       </Map>
 
-      {/* Mode Toggle Overlay */}
-      <div className="absolute top-6 right-6 z-10 flex flex-col gap-4 pointer-events-auto">
-        <div className="flex bg-slate-900/60 backdrop-blur-md p-1 rounded-lg border border-white/10 shadow-2xl">
+      <div className="absolute top-6 right-6 bottom-56 z-20 flex w-56 flex-col gap-4 overflow-y-auto pr-1 pointer-events-auto">
+        <div className="flex bg-slate-900/60 backdrop-blur-md p-1 rounded-lg border border-white/10 shadow-2xl shrink-0">
           <button
             onClick={() => setMode('natural')}
             className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-all ${mode === 'natural'
@@ -307,14 +436,13 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapCom
           </button>
         </div>
 
-        {/* Observation Year Panel */}
         <AnimatePresence mode="wait">
           <motion.div
             key={year}
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
-            className="bg-slate-900/80 backdrop-blur-md border border-slate-700 p-4 rounded-xl shadow-2xl min-w-[180px]"
+            className="bg-slate-900/80 backdrop-blur-md border border-slate-700 p-4 rounded-xl shadow-2xl shrink-0"
           >
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-1">Observation Year</div>
             <div className="text-3xl font-bold text-white tracking-tight">{year}</div>
@@ -324,8 +452,58 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage }: MapCom
           </motion.div>
         </AnimatePresence>
 
-        {/* Map Legend Component */}
-        <MapLegend onHover={setHoveredLayer} />
+        <div className="shrink-0">
+          <MapLegend onHover={setHoveredLayer} />
+        </div>
+
+        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700 p-4 rounded-xl shadow-2xl shrink-0">
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">Area of Interest</div>
+          <div className="flex flex-col gap-2">
+            {!isDrawingAoi ? (
+              <button
+                type="button"
+                onClick={startDrawing}
+                className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold py-2 transition-colors"
+              >
+                Draw AOI
+              </button>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={finishDrawing}
+                  disabled={draftPoints.length < 3}
+                  className="rounded-lg bg-emerald-500 disabled:bg-emerald-900 disabled:text-slate-500 hover:bg-emerald-600 text-white text-xs font-bold py-2 transition-colors"
+                >
+                  Finish
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelDrawing}
+                  className="rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold py-2 transition-colors border border-white/10"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={clearAoi}
+              className="w-full rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold py-2 transition-colors border border-white/10"
+            >
+              Clear AOI
+            </button>
+          </div>
+          {isDrawingAoi ? (
+            <div className="mt-3 text-[11px] leading-snug text-slate-400">
+              Click to add vertices. Double-click or press Finish to close the polygon.
+            </div>
+          ) : (
+            <div className="mt-3 text-[11px] leading-snug text-slate-500">
+              {aoi ? 'AOI locked. Analysis uses this polygon.' : 'No AOI set yet.'}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Loading Overlay */}
