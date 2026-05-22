@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-dotenv
+stac2cube
+sqlalchemy
+psycopg2-binary
+pydantic
+torch
+torchvision
+numpy
+scikit-image
+fpdf2
+earthengine-api
+google-auth
