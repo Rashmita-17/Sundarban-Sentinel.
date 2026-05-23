@@ -21,6 +21,29 @@ body {
   overflow: hidden;
 }
 
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.35) rgba(2, 6, 23, 0.4);
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: rgba(2, 6, 23, 0.4);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 999px;
+  border: 2px solid rgba(2, 6, 23, 0.55);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.35);
+}
+
 /* MapLibre overrides */
 .maplibregl-ctrl-bottom-right, .maplibregl-ctrl-bottom-left {
   display: none !important;

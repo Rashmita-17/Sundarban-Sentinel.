@@ -250,6 +250,11 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage, onAoiCha
 
   return (
     <div className="relative w-full h-full">
+      <div className="pointer-events-none absolute inset-0 z-0">
+        <div className="absolute -top-24 -right-24 h-72 w-72 rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="absolute -bottom-32 left-1/3 h-80 w-80 rounded-full bg-cyan-500/10 blur-3xl" />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-slate-950/25" />
+      </div>
       <Map
         ref={mapRef}
         {...viewState}
@@ -414,8 +419,9 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage, onAoiCha
         </Source>
       </Map>
 
-      <div className="absolute top-6 right-6 bottom-56 z-20 flex w-56 flex-col gap-4 overflow-y-auto pr-1 pointer-events-auto">
-        <div className="flex bg-slate-900/60 backdrop-blur-md p-1 rounded-lg border border-white/10 shadow-2xl shrink-0">
+      <div className="absolute top-6 right-6 bottom-56 z-20 flex w-56 flex-col gap-3 pointer-events-auto">
+        <div className="rounded-2xl border border-white/10 bg-slate-950/35 backdrop-blur-xl shadow-[0_0_30px_rgba(2,6,23,0.65)] p-3">
+          <div className="flex bg-slate-900/60 backdrop-blur-md p-1 rounded-xl border border-white/10 shadow-2xl">
           <button
             onClick={() => setMode('natural')}
             className={`px-4 py-1.5 rounded-md text-xs font-bold uppercase tracking-wider transition-all ${mode === 'natural'
@@ -435,6 +441,7 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage, onAoiCha
             NDVI
           </button>
         </div>
+          <div className="mt-3 overflow-y-auto pr-1 max-h-[calc(100vh-19rem)] space-y-3">
 
         <AnimatePresence mode="wait">
           <motion.div
@@ -442,7 +449,7 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage, onAoiCha
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
-            className="bg-slate-900/80 backdrop-blur-md border border-slate-700 p-4 rounded-xl shadow-2xl shrink-0"
+            className="bg-slate-900/70 backdrop-blur-md border border-slate-700/60 p-4 rounded-xl shadow-2xl"
           >
             <div className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-1">Observation Year</div>
             <div className="text-3xl font-bold text-white tracking-tight">{year}</div>
@@ -452,18 +459,18 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage, onAoiCha
           </motion.div>
         </AnimatePresence>
 
-        <div className="shrink-0">
+        <div>
           <MapLegend onHover={setHoveredLayer} />
         </div>
 
-        <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700 p-4 rounded-xl shadow-2xl shrink-0">
+        <div className="bg-slate-900/70 backdrop-blur-md border border-slate-700/60 p-4 rounded-xl shadow-2xl">
           <div className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">Area of Interest</div>
           <div className="flex flex-col gap-2">
             {!isDrawingAoi ? (
               <button
                 type="button"
                 onClick={startDrawing}
-                className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold py-2 transition-colors"
+                className="w-full rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold py-2 transition-colors shadow-lg shadow-emerald-500/10"
               >
                 Draw AOI
               </button>
@@ -503,6 +510,8 @@ const MapComponent = ({ year, analysisData, isLoading, selectedVillage, onAoiCha
               {aoi ? 'AOI locked. Analysis uses this polygon.' : 'No AOI set yet.'}
             </div>
           )}
+        </div>
+          </div>
         </div>
       </div>
 
